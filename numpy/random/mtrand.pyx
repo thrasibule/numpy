@@ -4112,6 +4112,28 @@ cdef class RandomState:
             string.memcpy(data + j * stride, data + i * stride, itemsize)
             string.memcpy(data + i * stride, buf, itemsize)
 
+    cdef inline _vitter_a(self, np.double[:]a, np.npy_intp n, np.npy_intp N, np.npy_intp j):
+        cdef:
+            np.npy_intp S, i = 0
+            int top = N - n
+            double Nreal = N, V, quote
+
+        while n >= 2:
+            V =
+            S = 0
+            quot = top / Nreal
+
+            while quot > V:
+                S += 1
+                top -= 1.
+                Nreal -= 1.
+                quot *= top / Nreal
+            j += S + 1
+            a[i] = j
+            i += 1
+            Nreal -= 1
+            n -= 1
+        S = floor((int)Nreal
     def permutation(self, object x):
         """
         permutation(x)
