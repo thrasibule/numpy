@@ -690,7 +690,7 @@ class TestRandomDist(object):
     def test_choice_large_sample(self):
         import hashlib
 
-        choice_hash = '6395868be877d27518c832213c17977c'
+        choice_hash = '3a05f36edeb16f4c7651d1bc2f42a430'
         random.bit_generator.seed(self.seed)
         actual = random.choice(10000, 5000, replace=False)
         if sys.byteorder != 'little':
