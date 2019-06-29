@@ -591,7 +591,8 @@ cdef class Generator:
         cdef int64_t *idx_data
         cdef np.npy_intp j
         cdef uint64_t set_size, mask, head, curr
-        cdef uint64_t[::1] val_set, pos_set
+        cdef uint64_t[:,::1] hash_set
+
         # Format and Verify input
         a = np.array(a, copy=False)
         if a.ndim == 0:
@@ -636,7 +637,6 @@ cdef class Generator:
             size = np.prod(shape, dtype=np.intp)
         else:
             size = 1
-
         # Actual sampling
         if replace:
             if p is not None:
@@ -696,32 +696,31 @@ cdef class Generator:
                     set_size = <uint64_t>(1.2 * size_i)
                     mask = _gen_mask(set_size)
                     set_size = 1 + mask
-                    val_set = np.full(set_size, -1, np.uint64)
-                    pos_set = np.full(set_size, -1, np.uint64)
+                    hash_set = np.full((set_size, 2), -1, np.uint64)
                     head = -1
                     with self.lock, cython.wraparound(False):
                         for j in range(pop_size_i - size_i, pop_size_i):
                             val = random_bounded_uint64(&self._bitgen, 0, j, 0, 0)
                             loc = val & mask
-                            while val_set[loc] != <uint64_t>-1 and val_set[loc] != val:
+                            while hash_set[loc, 0] != <uint64_t>-1 and hash_set[loc, 0] != val:
                                 loc = (loc + 1) & mask
-                            if val_set[loc] == -1: # then val not in hash_set
-                                val_set[loc] = val
-                                pos_set[loc] = head
+                            if hash_set[loc, 0] == <uint64_t>-1: # then val not in hash_set
+                                hash_set[loc, 0] = val
+                                hash_set[loc, 1] = head
                                 head = loc
                             else: # we need to insert j instead
                                 curr = loc
                                 loc = j & mask
-                                while val_set[loc] != -1:
+                                while hash_set[loc, 0] != <uint64_t>-1:
                                     loc = (loc + 1) & mask
-                                val_set[loc] = j
-                                pos_set[loc] = pos_set[curr]
-                                pos_set[curr] = loc
+                                hash_set[loc, 0] = j
+                                hash_set[loc, 1] = hash_set[curr, 1]
+                                hash_set[curr, 1] = loc
                     loc = 0
                     curr = head
                     while loc < size_i:
-                        idx_data[loc] = val_set[curr]
-                        curr = pos_set[curr]
+                        idx_data[loc] = hash_set[curr, 0]
+                        curr = hash_set[curr, 1]
                         loc += 1
                 if shape is not None:
                     idx.shape = shape
