@@ -11,6 +11,7 @@ from .xoshiro256 import Xoshiro256
 from cpython.pycapsule cimport PyCapsule_IsValid, PyCapsule_GetPointer
 from cpython cimport (Py_INCREF, PyFloat_AsDouble)
 from libc cimport string
+from libc.stdio cimport printf
 
 cimport cython
 cimport numpy as np
@@ -589,8 +590,8 @@ cdef class Generator:
         cdef int64_t val, t, loc, size_i, pop_size_i
         cdef int64_t *idx_data
         cdef np.npy_intp j
-        cdef uint64_t set_size, mask
-        cdef uint64_t[::1] hash_set
+        cdef uint64_t set_size, mask, head, curr
+        cdef uint64_t[::1] val_set, pos_set
         # Format and Verify input
         a = np.array(a, copy=False)
         if a.ndim == 0:
@@ -677,7 +678,8 @@ cdef class Generator:
                 size_i = size
                 pop_size_i = pop_size
                 # This is a heuristic tuning. should be improvable
-                if pop_size_i > 10000 and (size_i > (pop_size_i // 10)):
+                # if pop_size_i > 10000 and (size_i > (pop_size_i // 10)):
+                if False:
                     # Tail shuffle size elements
                     idx = np.arange(pop_size, dtype=np.int64)
                     idx_ptr = np.PyArray_BYTES(<np.ndarray>idx)
@@ -694,22 +696,33 @@ cdef class Generator:
                     set_size = <uint64_t>(1.2 * size_i)
                     mask = _gen_mask(set_size)
                     set_size = 1 + mask
-                    hash_set = np.full(set_size, -1, np.uint64)
+                    val_set = np.full(set_size, -1, np.uint64)
+                    pos_set = np.full(set_size, -1, np.uint64)
+                    head = -1
                     with self.lock, cython.wraparound(False):
                         for j in range(pop_size_i - size_i, pop_size_i):
                             val = random_bounded_uint64(&self._bitgen, 0, j, 0, 0)
                             loc = val & mask
-                            while hash_set[loc] != -1 and hash_set[loc] != val:
+                            while val_set[loc] != <uint64_t>-1 and val_set[loc] != val:
                                 loc = (loc + 1) & mask
-                            if hash_set[loc] == -1: # then val not in hash_set
-                                hash_set[loc] = val
-                                idx_data[j - pop_size_i + size_i] = val
+                            if val_set[loc] == -1: # then val not in hash_set
+                                val_set[loc] = val
+                                pos_set[loc] = head
+                                head = loc
                             else: # we need to insert j instead
+                                curr = loc
                                 loc = j & mask
-                                while hash_set[loc] != -1:
+                                while val_set[loc] != -1:
                                     loc = (loc + 1) & mask
-                                hash_set[loc] = j
-                                idx_data[j - pop_size_i + size_i] = j
+                                val_set[loc] = j
+                                pos_set[loc] = pos_set[curr]
+                                pos_set[curr] = loc
+                    loc = 0
+                    curr = head
+                    while loc < size_i:
+                        idx_data[loc] = val_set[curr]
+                        curr = pos_set[curr]
+                        loc += 1
                 if shape is not None:
                     idx.shape = shape
 
@@ -3966,4 +3979,3 @@ vonmises = _random_generator.vonmises
 wald = _random_generator.wald
 weibull = _random_generator.weibull
 zipf = _random_generator.zipf
-
