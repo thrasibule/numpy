@@ -594,10 +594,9 @@ cdef class Generator:
 
         """
         cdef char* idx_ptr
-        cdef int64_t buf
-        cdef char* buf_ptr
 
         cdef set idx_set
+        cdef np.ndarray idx
         cdef int64_t val, t, loc, size_i, pop_size_i
         cdef int64_t *idx_data
         cdef np.npy_intp j
@@ -652,10 +651,11 @@ cdef class Generator:
                 cdf = p.cumsum()
                 cdf /= cdf[-1]
                 uniform_samples = self.random(shape)
-                idx = cdf.searchsorted(uniform_samples, side='right')
-                idx = np.array(idx, copy=False, dtype=np.int64)  # searchsorted returns a scalar
+                idx = np.array(cdf.searchsorted(uniform_samples, side='right'),
+                               copy=False,
+                               dtype=np.int64) # searchsorted returns a scalar
             else:
-                idx = self.integers(0, pop_size, size=shape, dtype=np.int64)
+                idx = np.array(self.integers(0, pop_size, size=shape, dtype=np.int64))
         else:
             if size > pop_size:
                 raise ValueError("Cannot take a larger sample than "
@@ -689,11 +689,10 @@ cdef class Generator:
                 # This is a heuristic tuning. should be improvable
                 if pop_size_i > 200 and (size > 200 or size > (10 * pop_size // size)):
                     # Tail shuffle size elements
-                    idx = np.arange(pop_size, dtype=np.int64)
-                    idx_ptr = np.PyArray_BYTES(<np.ndarray>idx)
-                    buf_ptr = <char*>&buf
-                    self._shuffle_raw(pop_size_i, max(pop_size_i - size_i,1),
-                                      8, 8, idx_ptr, buf_ptr)
+                    idx = np.PyArray_Arange(0, pop_size_i, 1, np.NPY_INT64)
+                    with self.lock, nogil:
+                        self._shuffle_int(pop_size_i, max(pop_size_i - size_i, 1),
+                                          <int64_t*>idx.data)
                     # Copy to allow potentially large array backing idx to be gc
                     idx = idx[(pop_size - size):].copy()
                 else:
@@ -718,15 +717,12 @@ cdef class Generator:
                             idx_set.add(val)
                             loc += 1
                 if shape is not None:
-                    idx.shape = shape
-
-        if shape is None and isinstance(idx, np.ndarray):
-            # In most cases a scalar will have been made an array
-            idx = idx.item(0)
-
-        # Use samples as indices for a if a is array-like
+                  (<object>idx).shape = shape
         if a.ndim == 0:
-            return idx
+            if shape is None:
+                return idx.item(0)
+            else:
+                return idx
 
         if shape is not None and idx.ndim == 0:
             # If size == () then the user requested a 0-d array as opposed to
@@ -3887,6 +3883,28 @@ cdef class Generator:
             string.memcpy(buf, data + j * stride, itemsize)
             string.memcpy(data + j * stride, data + i * stride, itemsize)
             string.memcpy(data + i * stride, buf, itemsize)
+
+    cdef inline void _shuffle_int(self, np.npy_intp n, np.npy_intp first,
+                             int64_t* data) nogil:
+        """
+        Parameters
+        ----------
+        n
+            Number of elements in data
+        first
+            First observation to shuffle.  Shuffles n-1,
+            n-2, ..., first, so that when first=1 the entire
+            array is shuffled
+        data
+            Location of data
+        """
+        cdef np.npy_intp i, j
+        cdef int64_t temp
+        for i in reversed(range(first, n)):
+            j = random_bounded_uint64(&self._bitgen, 0, i, 0, 0)
+            temp = data[j]
+            data[j] = data[i]
+            data[i] = temp
 
     def permutation(self, object x):
         """
