@@ -647,13 +647,43 @@ cdef class Generator:
             size = 1
 
         # Actual sampling
+        cdef uint64_t[::1] w
+        cdef uint64_t[::1] alias
+        cdef double[::1] q
+        pop_size_i = pop_size
+        size_i = size
+        cdef int64_t h = 0, l = pop_size_i - 1, i
+        cdef double X
         if replace:
             if p is not None:
-                cdf = p.cumsum()
-                cdf /= cdf[-1]
-                uniform_samples = self.random(shape)
-                idx = cdf.searchsorted(uniform_samples, side='right')
-                idx = np.array(idx, copy=False, dtype=np.int64)  # searchsorted returns a scalar
+                q = p * pop_size
+                w = np.empty_like(q, dtype=np.uint64)
+                alias = np.empty_like(q, dtype=np.uint64)
+                for loc in range(pop_size_i):
+                    if q[loc] < 1.0:
+                        w[h] = loc
+                        h += 1
+                    else:
+                        w[l] = loc
+                        l -= 1
+                if h > 0 and l < (pop_size_i - 1):
+                    for loc in range(pop_size_i - 1):
+                        i = w[loc]
+                        j = w[l]
+                        alias[i] = j
+                        q[j] = (q[j] + q[i]) - 1.
+                        if q[j] < 1.0:
+                            l += 1
+                        if l >= pop_size_i:
+                            break
+                for loc in range(pop_size_i):
+                    q[loc] += loc
+                idx = np.empty(size_i, dtype=np.int64)
+                with self.lock:
+                    for loc in range(size_i):
+                        val = random_interval(&self._bitgen, pop_size_i - 1)
+                        X = val + random_double(&self._bitgen)
+                        idx[loc] = val if X < q[val] else alias[val]
             else:
                 idx = self.integers(0, pop_size, size=shape, dtype=np.int64)
         else:
