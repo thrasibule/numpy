@@ -42,7 +42,6 @@ cdef bint _check_bit_generator(object bitgen):
     cdef const char *name = "BitGenerator"
     return PyCapsule_IsValid(bitgen.capsule, name)
 
-
 cdef class Generator:
     """
     Generator(bit_generator)
@@ -591,11 +590,12 @@ cdef class Generator:
 
         """
 
-        cdef int64_t val, t, loc, size_i, pop_size_i
-        cdef int64_t *idx_data
-        cdef np.npy_intp j
+        cdef int64_t size_i, pop_size_i
         cdef uint64_t set_size, mask
-        cdef uint64_t[::1] hash_set
+        cdef uint64_t[::1] _set
+        cdef int64_t[::1] idx_data
+        cdef void (*_sample_floyd)(bitgen_t*, int64_t, uint64_t[::1], int64_t[::1]) nogil
+
         # Format and Verify input
         a = np.array(a, copy=False)
         if a.ndim == 0:
@@ -682,14 +682,10 @@ cdef class Generator:
                 size_i = size
                 pop_size_i = pop_size
                 # This is a heuristic tuning. should be improvable
-                if shuffle:
-                    cutoff = 50
-                else:
-                    cutoff = 20
-                if pop_size_i > 10000 and (size_i > (pop_size_i // cutoff)):
+                if shuffle and pop_size_i > 10000 and (size_i > (pop_size_i // 50)):
                     # Tail shuffle size elements
                     idx = np.PyArray_Arange(0, pop_size_i, 1, np.NPY_INT64)
-                    idx_data = <int64_t*>(<np.ndarray>idx).data
+                    idx_data = (<np.ndarray>idx)
                     with self.lock, nogil:
                         self._shuffle_int(pop_size_i, max(pop_size_i - size_i, 1),
                                           idx_data)
@@ -698,29 +694,25 @@ cdef class Generator:
                 else:
                     # Floyd's algorithm
                     idx = np.empty(size, dtype=np.int64)
-                    idx_data = <int64_t*>np.PyArray_DATA(<np.ndarray>idx)
-                    # smallest power of 2 larger than 1.2 * size
-                    set_size = <uint64_t>(1.2 * size_i)
-                    mask = _gen_mask(set_size)
-                    set_size = 1 + mask
-                    hash_set = np.full(set_size, <uint64_t>-1, np.uint64)
-                    with self.lock, cython.wraparound(False), nogil:
-                        for j in range(pop_size_i - size_i, pop_size_i):
-                            val = random_bounded_uint64(&self._bitgen, 0, j, 0, 0)
-                            loc = val & mask
-                            while hash_set[loc] != <uint64_t>-1 and hash_set[loc] != <uint64_t>val:
-                                loc = (loc + 1) & mask
-                            if hash_set[loc] == <uint64_t>-1: # then val not in hash_set
-                                hash_set[loc] = val
-                                idx_data[j - pop_size_i + size_i] = val
-                            else: # we need to insert j instead
-                                loc = j & mask
-                                while hash_set[loc] != <uint64_t>-1:
-                                    loc = (loc + 1) & mask
-                                hash_set[loc] = j
-                                idx_data[j - pop_size_i + size_i] = j
+                    idx_data = <np.ndarray>idx
+                    if size_i < (pop_size_i // 100): # hash set
+                        # smallest power of 2 larger than 1.2 * size
+                        set_size = <uint64_t>(1.2 * size_i)
+                        mask = _gen_mask(set_size)
+                        set_size = 1 + mask
+
+                        _set = np.full(set_size, <uint64_t>-1, np.uint64)
+                        _sample_floyd = &Generator._sample_floyd_hashset
+
+                    else:
+                        _set = np.zeros(pop_size_i // 64 + 1, np.uint64)
+                        _sample_floyd = &Generator._sample_floyd_bitset
+
+                    with self.lock, nogil:
+                        _sample_floyd(&self._bitgen, pop_size_i, _set, idx_data)
                         if shuffle:
                             self._shuffle_int(size_i, 1, idx_data)
+
                 if shape is not None:
                     idx.shape = shape
 
@@ -3893,7 +3885,7 @@ cdef class Generator:
             string.memcpy(data + i * stride, buf, itemsize)
 
     cdef inline void _shuffle_int(self, np.npy_intp n, np.npy_intp first,
-                             int64_t* data) nogil:
+                                  int64_t[::1] data) nogil:
         """
         Parameters
         ----------
@@ -3913,6 +3905,47 @@ cdef class Generator:
             temp = data[j]
             data[j] = data[i]
             data[i] = temp
+
+    @staticmethod
+    cdef inline void _sample_floyd_hashset(bitgen_t *bitgen, int64_t N, uint64_t[::1] hash_set,
+                                           int64_t[::1] idx_data) nogil:
+        cdef:
+            uint64_t val, loc
+            int64_t i, j
+            uint64_t mask = hash_set.shape[0] - 1
+
+        for i in range(idx_data.shape[0]):
+            j = i + N - idx_data.shape[0]
+            val = random_bounded_uint64(bitgen, 0, j, 0, 0)
+            loc = val & mask
+            while hash_set[loc] != <uint64_t>-1 and hash_set[loc] != <uint64_t>val:
+                loc = (loc + 1) & mask
+            if hash_set[loc] == <uint64_t>-1: # then val not in hash_set
+                hash_set[loc] = val
+                idx_data[i] = val
+            else: # we need to insert j instead
+                loc = j & mask
+                while hash_set[loc] != <uint64_t>-1:
+                    loc = (loc + 1) & mask
+                hash_set[loc] = j
+                idx_data[i] = j
+
+    @staticmethod
+    cdef inline void _sample_floyd_bitset(bitgen_t *bitgen, int64_t N, uint64_t[::1] bit_set,
+                                          int64_t[::1] idx_data) nogil:
+        cdef:
+            uint64_t mask = (1 << 6) - 1
+            uint64_t i, j, val
+
+        for i in range(idx_data.shape[0]):
+            j = i + N - idx_data.shape[0]
+            val = random_bounded_uint64(bitgen, 0, j, 0, 0)
+            if bit_set[val >> 6] & (1 << (val & mask)):
+                bit_set[j >> 6] |= (1 << (j & mask))
+                idx_data[i] = j
+            else:
+                bit_set[val >> 6] |= (1 << (val & mask))
+                idx_data[i] = val
 
     def permutation(self, object x):
         """
