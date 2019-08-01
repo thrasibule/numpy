@@ -593,9 +593,13 @@ cdef class Generator:
 
         cdef int64_t val, t, loc, size_i, pop_size_i
         cdef int64_t *idx_data
-        cdef np.npy_intp j
+        cdef np.npy_intp i, j
         cdef uint64_t set_size, mask
         cdef uint64_t[::1] hash_set
+        cdef np.float64_t[::1] heap
+        cdef double* pix
+        cdef double gas, cutoff
+
         # Format and Verify input
         a = np.array(a, copy=False)
         if a.ndim == 0:
@@ -661,23 +665,32 @@ cdef class Generator:
             if p is not None:
                 if np.count_nonzero(p > 0) < size:
                     raise ValueError("Fewer non-zero entries in p than size")
-                n_uniq = 0
-                p = p.copy()
-                found = np.zeros(shape, dtype=np.int64)
-                flat_found = found.ravel()
-                while n_uniq < size:
-                    x = self.random((size - n_uniq,))
-                    if n_uniq > 0:
-                        p[flat_found[0:n_uniq]] = 0
-                    cdf = np.cumsum(p)
-                    cdf /= cdf[-1]
-                    new = cdf.searchsorted(x, side='right')
-                    _, unique_indices = np.unique(new, return_index=True)
-                    unique_indices.sort()
-                    new = new.take(unique_indices)
-                    flat_found[n_uniq:n_uniq + new.size] = new
-                    n_uniq += new.size
-                idx = found
+                size_i = size
+                pop_size_i = pop_size
+                idx = np.empty(size_i, dtype=np.int64)
+                idx_data = <int64_t*>np.PyArray_DATA(<np.ndarray>idx)
+                heap = np.empty(1 + pop_size, np.float64)
+                heap[0] = 0
+                heap[1:] = p[:]
+                for i in range(pop_size_i, 1, -1):
+                    heap[i>>1] += heap[i]
+
+                with self.lock, nogil:
+                    for i in range(size_i):
+                        gas = heap[1] * random_double(&self._bitgen)
+                        j = 1
+                        while gas >= heap[j]:
+                            gas -= pix[j]
+                            j <<= 1
+                            if gas >= heap[j]:
+                                gas -= heap[j]
+                                j += 1
+                        w = pix[j]
+                    while j:
+                        heap[j] -= w
+                        j >>= 1
+                    idx_data[i] = j
+
             else:
                 size_i = size
                 pop_size_i = pop_size
