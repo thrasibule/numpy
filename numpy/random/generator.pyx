@@ -11,6 +11,7 @@ from .pcg64 import PCG64
 from cpython.pycapsule cimport PyCapsule_IsValid, PyCapsule_GetPointer
 from cpython cimport (Py_INCREF, PyFloat_AsDouble)
 from libc cimport string
+from libc.stdlib cimport malloc, free
 
 cimport cython
 cimport numpy as np
@@ -593,9 +594,15 @@ cdef class Generator:
 
         cdef int64_t val, t, loc, size_i, pop_size_i
         cdef int64_t *idx_data
-        cdef np.npy_intp j
+        cdef np.npy_intp i, j
         cdef uint64_t set_size, mask
         cdef uint64_t[::1] hash_set
+        cdef double* G
+        cdef double* H
+        cdef int64_t l, r
+        cdef double* pix
+        cdef double atol, psum, cutoff, x, C, prob
+
         # Format and Verify input
         a = np.array(a, copy=False)
         if a.ndim == 0:
@@ -610,7 +617,6 @@ cdef class Generator:
             pop_size = a.shape[axis]
             if pop_size == 0 and np.prod(size) != 0:
                 raise ValueError("'a' cannot be empty unless no samples are taken")
-
         if p is not None:
             d = len(p)
 
@@ -661,23 +667,57 @@ cdef class Generator:
             if p is not None:
                 if np.count_nonzero(p > 0) < size:
                     raise ValueError("Fewer non-zero entries in p than size")
-                n_uniq = 0
-                p = p.copy()
-                found = np.zeros(shape, dtype=np.int64)
-                flat_found = found.ravel()
-                while n_uniq < size:
-                    x = self.random((size - n_uniq,))
-                    if n_uniq > 0:
-                        p[flat_found[0:n_uniq]] = 0
-                    cdf = np.cumsum(p)
-                    cdf /= cdf[-1]
-                    new = cdf.searchsorted(x, side='right')
-                    _, unique_indices = np.unique(new, return_index=True)
-                    unique_indices.sort()
-                    new = new.take(unique_indices)
-                    flat_found[n_uniq:n_uniq + new.size] = new
-                    n_uniq += new.size
-                idx = found
+                size_i = size
+                pop_size_i = pop_size
+                idx = np.empty(shape, dtype=np.int64)
+                idx_data = <int64_t*>np.PyArray_DATA(<np.ndarray>idx)
+                G = <double*>malloc((pop_size_i - 1) * sizeof(double))
+                H = <double*>malloc((pop_size_i - 1) * sizeof(double))
+                with cython.wraparound(False):
+                    for i in range(pop_size_i - 2, -1, -1):
+                        l = 2 * i + 1
+                        r = l + 1
+                        if l >= pop_size_i - 1:
+                            if l - pop_size_i == - 1:
+                                G[i] = pix[l]
+                            else:
+                                G[i] = pix[l - pop_size_i]
+                        else:
+                            G[i] = G[l] + H[l]
+                        if r >= pop_size_i - 1:
+                            if r - pop_size_i == -1:
+                                H[i] = pix[r]
+                            else:
+                                H[i] = pix[r - pop_size_i]
+                        else:
+                            H[i] = G[r] + H[r]
+
+                with self.lock, nogil, cython.wraparound(False):
+                    for loc in range(size_i):
+                        C = 0.
+                        x = p_sum * random_double(&self._bitgen)
+                        i = 0
+                        while i < (pop_size_i - 1):
+                            if x < G[i] + C:
+                                i = 2 * i + 1
+                            else:
+                                C = G[i] + C
+                                i = 2 * i + 2
+                        if i >= pop_size_i:
+                            val = i - pop_size_i
+                        else:
+                            val = i
+                        idx_data[loc] = val
+                        prob = pix[val]
+                        p_sum -= prob
+                        while i > 0:
+                            if i & 1:
+                                i //= 2
+                                G[i] -= prob
+                            else:
+                                i = (i-1) // 2
+                free(G)
+                free(H)
             else:
                 size_i = size
                 pop_size_i = pop_size
@@ -686,7 +726,7 @@ cdef class Generator:
                     cutoff = 50
                 else:
                     cutoff = 20
-                if pop_size_i > 10000 and (size_i > (pop_size_i // cutoff)):
+                if pop_size_i > 10000 and (size_i > (pop_size_i / cutoff)):
                     # Tail shuffle size elements
                     idx = np.PyArray_Arange(0, pop_size_i, 1, np.NPY_INT64)
                     idx_data = <int64_t*>(<np.ndarray>idx).data
@@ -694,7 +734,7 @@ cdef class Generator:
                         self._shuffle_int(pop_size_i, max(pop_size_i - size_i, 1),
                                           idx_data)
                     # Copy to allow potentially large array backing idx to be gc
-                    idx = idx[(pop_size - size):].copy()
+                    idx = idx[(pop_size_i - size_i):].copy()
                 else:
                     # Floyd's algorithm
                     idx = np.empty(size, dtype=np.int64)
