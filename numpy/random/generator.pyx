@@ -597,8 +597,9 @@ cdef class Generator:
         cdef uint64_t set_size, mask
         cdef uint64_t[::1] hash_set
         cdef np.float64_t[::1] heap
+        cdef np.float64_t[::1] p_copy
         cdef double* pix
-        cdef double gas, cutoff
+        cdef double gas, cutoff, w
 
         # Format and Verify input
         a = np.array(a, copy=False)
@@ -614,7 +615,6 @@ cdef class Generator:
             pop_size = a.shape[axis]
             if pop_size == 0 and np.prod(size) != 0:
                 raise ValueError("'a' cannot be empty unless no samples are taken")
-
         if p is not None:
             d = len(p)
 
@@ -669,28 +669,31 @@ cdef class Generator:
                 pop_size_i = pop_size
                 idx = np.empty(size_i, dtype=np.int64)
                 idx_data = <int64_t*>np.PyArray_DATA(<np.ndarray>idx)
-                heap = np.empty(1 + pop_size, np.float64)
+                heap = np.empty(1 + pop_size_i, np.float64)
                 heap[0] = 0
-                heap[1:] = p[:]
+                string.memcpy(&heap[1], pix, pop_size_i * sizeof(np.float64_t))
+                p_copy = p.copy()
                 for i in range(pop_size_i, 1, -1):
                     heap[i>>1] += heap[i]
 
-                with self.lock, nogil:
+                with self.lock, nogil, cython.wraparound(False):
                     for i in range(size_i):
                         gas = heap[1] * random_double(&self._bitgen)
                         j = 1
-                        while gas >= heap[j]:
-                            gas -= pix[j]
+                        w = p_copy[j-1]
+                        while gas >= w:
+                            gas -= w
                             j <<= 1
                             if gas >= heap[j]:
                                 gas -= heap[j]
                                 j += 1
-                        w = pix[j]
-                    while j:
-                        heap[j] -= w
-                        j >>= 1
-                    idx_data[i] = j
-
+                            w = p_copy[j-1]
+                        idx_data[i] = j-1
+                        if i < size_i - 1:
+                            p_copy[j-1] = 0.
+                            while j:
+                                heap[j] -= w
+                                j >>= 1
             else:
                 size_i = size
                 pop_size_i = pop_size
