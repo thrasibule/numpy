@@ -699,7 +699,7 @@ cdef class Generator:
                     cutoff = 50
                 else:
                     cutoff = 20
-                if pop_size_i > 10000 and (size_i > (pop_size_i // cutoff)):
+                if pop_size_i > 10000 and (size_i > (pop_size_i / cutoff)):
                     # Tail shuffle size elements
                     idx = np.PyArray_Arange(0, pop_size_i, 1, np.NPY_INT64)
                     idx_data = <int64_t*>(<np.ndarray>idx).data
@@ -707,7 +707,7 @@ cdef class Generator:
                         self._shuffle_int(pop_size_i, max(pop_size_i - size_i, 1),
                                           idx_data)
                     # Copy to allow potentially large array backing idx to be gc
-                    idx = idx[(pop_size - size):].copy()
+                    idx = idx[(pop_size_i - size_i):].copy()
                 else:
                     # Floyd's algorithm
                     idx = np.empty(size, dtype=np.int64)
