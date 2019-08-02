@@ -667,7 +667,7 @@ cdef class Generator:
                     raise ValueError("Fewer non-zero entries in p than size")
                 size_i = size
                 pop_size_i = pop_size
-                idx = np.empty(size_i, dtype=np.int64)
+                idx = np.empty(shape, dtype=np.int64)
                 idx_data = <int64_t*>np.PyArray_DATA(<np.ndarray>idx)
                 heap = np.empty(1 + pop_size_i, np.float64)
                 heap[0] = 0
