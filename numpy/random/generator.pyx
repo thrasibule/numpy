@@ -597,7 +597,6 @@ cdef class Generator:
         cdef uint64_t set_size, mask
         cdef uint64_t[::1] hash_set
         cdef np.float64_t[::1] heap
-        cdef np.float64_t[::1] p_copy
         cdef double* pix
         cdef double gas, cutoff, w
 
@@ -672,7 +671,8 @@ cdef class Generator:
                 heap = np.empty(1 + pop_size_i, np.float64)
                 heap[0] = 0
                 string.memcpy(&heap[1], pix, pop_size_i * sizeof(np.float64_t))
-                p_copy = p.copy()
+                p = p.copy()
+                pix = <double*>np.PyArray_DATA(p)
                 for i in range(pop_size_i, 1, -1):
                     heap[i>>1] += heap[i]
 
@@ -680,17 +680,17 @@ cdef class Generator:
                     for i in range(size_i):
                         gas = heap[1] * random_double(&self._bitgen)
                         j = 1
-                        w = p_copy[j-1]
+                        w = pix[j-1]
                         while gas >= w:
                             gas -= w
                             j <<= 1
                             if gas >= heap[j]:
                                 gas -= heap[j]
                                 j += 1
-                            w = p_copy[j-1]
+                            w = pix[j-1]
                         idx_data[i] = j-1
                         if i < size_i - 1:
-                            p_copy[j-1] = 0.
+                            pix[j-1] = 0.
                             while j:
                                 heap[j] -= w
                                 j >>= 1
