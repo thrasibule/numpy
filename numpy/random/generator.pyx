@@ -635,7 +635,10 @@ cdef class Generator:
             p_sum = kahan_sum(pix, pop_size_i)
             if p_sum != p_sum:
                 raise ValueError("probabilities contain NaN")
-            if np.logical_or.reduce(p < 0):
+            for i in range(pop_size_i):
+                if pix[i] < 0:
+                    break
+            if pix[i] < 0:
                 raise ValueError("probabilities are not non-negative")
             if abs(p_sum - 1.) > atol:
                 raise ValueError("probabilities do not sum to 1")
@@ -664,7 +667,11 @@ cdef class Generator:
                 raise ValueError("negative dimensions are not allowed")
 
             if p is not None:
-                if np.count_nonzero(p > 0) < size_i:
+                val = 0
+                for i in range(pop_size_i):
+                    if pix[i] > 0:
+                        val +=1
+                if val < size_i:
                     raise ValueError("Fewer non-zero entries in p than size")
                 idx = np.empty(shape, dtype=np.int64)
                 idx_data = <int64_t*>np.PyArray_DATA(<np.ndarray>idx)
