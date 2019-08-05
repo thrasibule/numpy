@@ -11,6 +11,7 @@ from .pcg64 import PCG64
 from cpython.pycapsule cimport PyCapsule_IsValid, PyCapsule_GetPointer
 from cpython cimport (Py_INCREF, PyFloat_AsDouble)
 from libc cimport string
+from libc.math cimport sqrt
 from libc.stdlib cimport malloc, free
 
 cimport cython
@@ -601,40 +602,38 @@ cdef class Generator:
         cdef double* H
         cdef int64_t l, r
         cdef double* pix
-        cdef double atol, psum, cutoff, x, C, prob
+        cdef double atol, p_sum, cutoff, x, C, prob
 
         # Format and Verify input
         a = np.array(a, copy=False)
-        if a.ndim == 0:
+        if (<np.ndarray>a).ndim == 0:
             try:
                 # __index__ must return an integer by python rules.
-                pop_size = operator.index(a.item())
+                pop_size_i = operator.index(a.item())
             except TypeError:
                 raise ValueError("a must be 1-dimensional or an integer")
-            if pop_size <= 0 and np.prod(size) != 0:
+            if pop_size_i <= 0 and np.prod(size) != 0:
                 raise ValueError("a must be greater than 0 unless no samples are taken")
         else:
-            pop_size = a.shape[axis]
-            if pop_size == 0 and np.prod(size) != 0:
+            pop_size_i = a.shape[axis]
+            if pop_size_i == 0 and np.prod(size) != 0:
                 raise ValueError("'a' cannot be empty unless no samples are taken")
         if p is not None:
-            d = len(p)
-
-            atol = np.sqrt(np.finfo(np.float64).eps)
+            atol = sqrt(np.finfo(np.float64).eps)
             if isinstance(p, np.ndarray):
                 if np.issubdtype(p.dtype, np.floating):
-                    atol = max(atol, np.sqrt(np.finfo(p.dtype).eps))
+                    atol = max(atol, sqrt(np.finfo(p.dtype).eps))
 
-            p = <np.ndarray>np.PyArray_FROM_OTF(
+            p = np.PyArray_FROM_OTF(
                 p, np.NPY_DOUBLE, np.NPY_ALIGNED | np.NPY_ARRAY_C_CONTIGUOUS)
-            pix = <double*>np.PyArray_DATA(p)
+            pix = <double*>(<np.ndarray>p).data
 
-            if p.ndim != 1:
+            if (<np.ndarray>p).ndim != 1:
                 raise ValueError("'p' must be 1-dimensional")
-            if p.size != pop_size:
+            if (<np.ndarray>p).shape[0] != pop_size_i:
                 raise ValueError("'a' and 'p' must have same size")
-            p_sum = kahan_sum(pix, d)
-            if np.isnan(p_sum):
+            p_sum = kahan_sum(pix, pop_size_i)
+            if p_sum != p_sum:
                 raise ValueError("probabilities contain NaN")
             if np.logical_or.reduce(p < 0):
                 raise ValueError("probabilities are not non-negative")
@@ -643,9 +642,9 @@ cdef class Generator:
 
         shape = size
         if shape is not None:
-            size = np.prod(shape, dtype=np.intp)
+            size_i = np.prod(shape, dtype=np.intp)
         else:
-            size = 1
+            size_i = 1
 
         # Actual sampling
         if replace:
@@ -656,19 +655,17 @@ cdef class Generator:
                 idx = cdf.searchsorted(uniform_samples, side='right')
                 idx = np.array(idx, copy=False, dtype=np.int64)  # searchsorted returns a scalar
             else:
-                idx = self.integers(0, pop_size, size=shape, dtype=np.int64)
+                idx = self.integers(0, pop_size_i, size=shape, dtype=np.int64)
         else:
-            if size > pop_size:
+            if size_i > pop_size_i:
                 raise ValueError("Cannot take a larger sample than "
                                  "population when 'replace=False'")
-            elif size < 0:
+            elif size_i < 0:
                 raise ValueError("negative dimensions are not allowed")
 
             if p is not None:
-                if np.count_nonzero(p > 0) < size:
+                if np.count_nonzero(p > 0) < size_i:
                     raise ValueError("Fewer non-zero entries in p than size")
-                size_i = size
-                pop_size_i = pop_size
                 idx = np.empty(shape, dtype=np.int64)
                 idx_data = <int64_t*>np.PyArray_DATA(<np.ndarray>idx)
                 G = <double*>malloc((pop_size_i - 1) * sizeof(double))
@@ -719,8 +716,6 @@ cdef class Generator:
                 free(G)
                 free(H)
             else:
-                size_i = size
-                pop_size_i = pop_size
                 # This is a heuristic tuning. should be improvable
                 if shuffle:
                     cutoff = 50
@@ -769,7 +764,7 @@ cdef class Generator:
             idx = idx.item(0)
 
         # Use samples as indices for a if a is array-like
-        if a.ndim == 0:
+        if (<np.ndarray>a).ndim == 0:
             return idx
 
         if shape is not None and idx.ndim == 0:
