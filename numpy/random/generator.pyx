@@ -709,10 +709,7 @@ cdef class Generator:
                             else:
                                 C = G[i] + C
                                 i = 2 * i + 2
-                        if i >= pop_size_i:
-                            val = i - pop_size_i
-                        else:
-                            val = i
+                        val = i - pop_size_i if i >= pop_size_i else i
                         idx_data[loc] = val
                         prob = pix[val]
                         p_sum -= prob
