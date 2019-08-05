@@ -667,6 +667,7 @@ cdef class Generator:
                 raise ValueError("negative dimensions are not allowed")
 
             if p is not None:
+                # count non-zero entries
                 val = 0
                 for i in range(pop_size_i):
                     if pix[i] > 0:
@@ -674,29 +675,30 @@ cdef class Generator:
                 if val < size_i:
                     raise ValueError("Fewer non-zero entries in p than size")
                 idx = np.empty(shape, dtype=np.int64)
-                idx_data = <int64_t*>np.PyArray_DATA(<np.ndarray>idx)
+                idx_data = <int64_t*>(<np.ndarray>idx).data
+                # This is Wong and Easton (1980) algorithm
                 G = <double*>malloc((pop_size_i - 1) * sizeof(double))
+                if G is NULL:
+                    raise MemoryError
                 H = <double*>malloc((pop_size_i - 1) * sizeof(double))
-                with cython.wraparound(False):
+                if H is NULL:
+                    raise MemoryError
+
+                with nogil:
                     for i in range(pop_size_i - 2, -1, -1):
                         l = 2 * i + 1
                         r = l + 1
                         if l >= pop_size_i - 1:
-                            if l - pop_size_i == - 1:
-                                G[i] = pix[l]
-                            else:
-                                G[i] = pix[l - pop_size_i]
+                            G[i] = pix[l if l - pop_size_i == -1 else l - pop_size_i]
                         else:
                             G[i] = G[l] + H[l]
                         if r >= pop_size_i - 1:
-                            if r - pop_size_i == -1:
-                                H[i] = pix[r]
-                            else:
-                                H[i] = pix[r - pop_size_i]
+                            H[i] = pix[r if r - pop_size_i == -1 else r - pop_size_i]
                         else:
                             H[i] = G[r] + H[r]
+                    free(H)
 
-                with self.lock, nogil, cython.wraparound(False):
+                with self.lock, nogil:
                     for loc in range(size_i):
                         C = 0.
                         x = p_sum * random_double(&self._bitgen)
@@ -721,7 +723,6 @@ cdef class Generator:
                             else:
                                 i = (i-1) // 2
                 free(G)
-                free(H)
             else:
                 # This is a heuristic tuning. should be improvable
                 if shuffle:
